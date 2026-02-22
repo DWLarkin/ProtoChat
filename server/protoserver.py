@@ -2,17 +2,18 @@
 """Defines and potentially runs a ProtoChat server."""
 import argparse
 import socket
+import struct
 
 from dataclasses import field
 from enum import IntEnum, auto
 
 
 class NetworkConstants(IntEnum):
-    MAX_SEND = 4096
+    MAX_RECV = 4096
 
 
 class ProtocolCodes(IntEnum):
-    INVALID_CODE = auto()
+    INVALID_CODE = 0
     CLIENT_HELLO = auto()
     SERVER_ACK = auto()
     OUT_OF_BOUNDS = auto()
@@ -91,28 +92,44 @@ def check_address_family(str_addr: str) -> socket.AddressFamily:
     raise ValueError("String does not contain an address")
 
 
-def recv_all(conn: socket.socket, data: bytes) -> bool:
-    """Attempts to send all requested bytes.
+def recv_all(conn: socket.socket, length: int) -> bytes:
+    """Attempts to recv all requested bytes.
 
     Args:
-        conn (socket.socket): The socket to send on.
-        len (int): The number of bytes to send.
+        conn (socket.socket): The socket to recv on.
+        length (int): The number of bytes to recv.
 
     Returns:
-        True if the bytes were sent, False on socket disconnect/failure.
+        Whatever bytes are received, or no bytes on socket disconnect/error.
 
     """
-    while data:
+    all_received = bytearray()
+    amt_remaining = length
+
+    while amt_remaining > 0:
+        recv_amt = NetworkConstants.MAX_RECV if amt_remaining > NetworkConstants.MAX_RECV else amt_remaining
+
         try:
-            conn.sendall
+            recv_ret = conn.recv(recv_amt, 0)
         except OSError:
+            print("Recv failure")
             return bytes()
+
+        if not recv_ret:
+            print("Peer disconnected")
+            return bytes()
+
+        all_received += recv_ret
+        amt_remaining -= len(recv_ret)
+
+    return all_received
 
 
 class ProtoClient:
     """Class-based handler for ProtoChat clients."""
 
-    def __init__(self, conn: socket.socket):
+    def __init__(self, name: str, conn: socket.socket):
+        self.name = name
         self.conn = conn
 
     def close(self):
@@ -127,7 +144,7 @@ class ProtoServer:
         self.bind_address = address
         self.bind_port = port
         self.servsock: socket.socket | None = None
-        self.clients: dict[str, ProtoClient] = field(default_factory=dict())
+        self.clients: list[ProtoClient] = field(default_factory=list())
 
         self.start_listening()
 
@@ -142,14 +159,46 @@ class ProtoServer:
         except OSError as err:
             raise RuntimeError("failed to create ProtoChat server") from err
 
-    def handle_client_hello(self):
+    def handle_client_hello(self, conn: socket.socket):
+        recv_bytes = recv_all(conn, 2)  # task code + name length
+        if not recv_bytes or recv_bytes[0] != ProtocolCodes.CLIENT_HELLO:
+            conn.close()
+            return
 
+        encoded_name = recv_all(conn, recv_bytes[1])
+        if not encoded_name:
+            conn.close()
+            return
+
+        try:
+            client_name = encoded_name.decode("utf-8")
+        except UnicodeDecodeError:
+            conn.close()
+            return
+
+        server_ack = struct.pack(
+            f"!BB{len(encoded_name)}s",
+            ProtocolCodes.SERVER_ACK,
+            len(encoded_name),
+            encoded_name,
+        )
+
+        try:
+            conn.sendall(server_ack, 0)
+        except OSError:
+            conn.close()
+            return
+
+        print(f"New client name is {client_name}")
 
     def run_server(self):
         """Runs the ProtoChat server, accepting and handling clients."""
         while True:
             conn, cliaddr = self.servsock.accept()
             print(f"Client connected from {cliaddr[0]}:{cliaddr[1]}")
+
+            self.handle_client_hello(conn)
+
             conn.close()
 
     def close(self):

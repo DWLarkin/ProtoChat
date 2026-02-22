@@ -316,7 +316,7 @@ int greet_server(pstate_t *proto_state) {
     buffer[0] = CLIENT_HELLO;
     buffer[1] = proto_state->name_len;
 
-    if (0 >= snprintf((char *)(&buffer[1]), (GREET_BUF_LEN - 2), "%s", proto_state->name)) {
+    if (0 >= snprintf((char *)(&buffer[2]), (GREET_BUF_LEN - 2), "%s", proto_state->name)) {
         debug_print("Snprintf failed\n");
         close(proto_state->connfd);
         return -1;
