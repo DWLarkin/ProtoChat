@@ -11,5 +11,7 @@ int main(void) {
         return EXIT_SUCCESS;
     }
 
+    run_client(&proto_state);
+
     return EXIT_SUCCESS;
 }

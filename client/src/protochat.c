@@ -4,13 +4,15 @@
 #include <errno.h>
 #include <limits.h>
 #include <netdb.h>
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
+#include <sys/select.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 /**
@@ -22,6 +24,8 @@
  * @todo This is a simple print wrapper atm, will probably change later with ncurses.
  */
 void display_output(const char *fmt, ...) {
+    assert(NULL != fmt);
+
     va_list args;
 
     va_start(args, fmt);
@@ -96,13 +100,42 @@ ssize_t get_input_line(char *input_buffer, size_t max_len) {
     return (ssize_t)current_len;
 }
 
+void push_short(void *buf, uint16_t val) {
+    assert(NULL != buf);
+
+    uint8_t *byte_buf = buf;
+
+    byte_buf[0] = (uint8_t)(val >> 8);
+    byte_buf[1] = (uint8_t)(val & 0xFF);
+}
+
+uint16_t pop_short(void *buf) {
+    assert(NULL != buf);
+
+    uint16_t ret = 0;
+    uint8_t *byte_buf = buf;
+
+    ret |= (uint16_t)byte_buf[0] << 8;
+    ret |= (uint16_t)byte_buf[1];
+
+    return ret;
+}
+
 int send_all(int sockfd, void *buf, size_t len) {
+    assert(0 <= sockfd);
+    assert(NULL != buf);
+
     size_t total_sent = 0;
+    uint8_t *byte_buf = buf;
+
+    if (0 == len) {
+        return 0;
+    }
 
     while (total_sent < len) {
         size_t to_send = ((len - total_sent) > SEND_MAX) ? SEND_MAX : len - total_sent;
 
-        ssize_t send_ret = send(sockfd, buf, to_send, 0);
+        ssize_t send_ret = send(sockfd, &byte_buf[total_sent], to_send, 0);
         if (0 >= send_ret) {
             debug_print("Send failed\n");
             return -1;
@@ -115,17 +148,28 @@ int send_all(int sockfd, void *buf, size_t len) {
 }
 
 int recv_all(int sockfd, void *buf, size_t len) {
+    assert(0 <= sockfd);
+    assert(NULL != buf);
+
     size_t total_received = 0;
+    uint8_t *byte_buf = buf;
+
+    display_output("Trying to call recv for %zu bytes\n", len);
+
+    if (0 == len) {
+        return 0;
+    }
 
     while (total_received < len) {
         size_t to_recv = ((len - total_received) > SEND_MAX) ? SEND_MAX : len - total_received;
 
-        ssize_t recv_ret = recv(sockfd, buf, to_recv, 0);
+        ssize_t recv_ret = recv(sockfd, &byte_buf[total_received], to_recv, 0);
         if (0 >= recv_ret) {
-            debug_print("Send failed\n");
+            debug_print("Recv failed\n");
             return -1;
         }
 
+        display_output("Received bytes\n");
         total_received += recv_ret;
     }
 
@@ -140,6 +184,8 @@ int recv_all(int sockfd, void *buf, size_t len) {
  * @returns 0 on success, non-zero on failure.
  */
 int get_address(pstate_t *proto_state) {
+    assert(NULL != proto_state);
+
     char response_buffer[YN_RESP_LEN]; // For the confirmation prompt.
 
     while (1) {
@@ -170,6 +216,9 @@ int get_address(pstate_t *proto_state) {
 }
 
 int convert_port(pstate_t *proto_state, char *port_buffer) {
+    assert(NULL != proto_state);
+    assert(NULL != port_buffer);
+
     char *check_ptr = NULL;
 
     unsigned long converted_val = strtoul(port_buffer, &check_ptr, 0);
@@ -191,6 +240,8 @@ int convert_port(pstate_t *proto_state, char *port_buffer) {
 }
 
 int get_port(pstate_t *proto_state) {
+    assert(NULL != proto_state);
+
     char port_buffer[(PORT_DIGITS + 2)]; // For the stringified port.
 
     while (1) {
@@ -220,6 +271,8 @@ int get_port(pstate_t *proto_state) {
 }
 
 int get_name(pstate_t *proto_state) {
+    assert(NULL != proto_state);
+
     while (1) {
         display_output("\nLastly, what would you like your name to be? ");
 
@@ -244,6 +297,8 @@ int get_name(pstate_t *proto_state) {
 }
 
 int create_connection(struct addrinfo *current_addr) {
+    assert(NULL != current_addr);
+
     int sockfd = socket(current_addr->ai_family, current_addr->ai_socktype, current_addr->ai_protocol);
     if (0 > sockfd) {
         debug_print("Socket call failed\n");
@@ -260,6 +315,8 @@ int create_connection(struct addrinfo *current_addr) {
 }
 
 int attempt_addresses(pstate_t *proto_state) {
+    assert(NULL != proto_state);
+
     char str_port[(PORT_DIGITS + 1)] = {0};
     struct addrinfo hints = {0};
     struct addrinfo *res = NULL;
@@ -310,13 +367,15 @@ int attempt_addresses(pstate_t *proto_state) {
 }
 
 int greet_server(pstate_t *proto_state) {
+    assert(NULL != proto_state);
+
     uint8_t ack_buffer[GREET_BUF_LEN];
     uint8_t buffer[GREET_BUF_LEN];
 
     buffer[0] = CLIENT_HELLO;
     buffer[1] = proto_state->name_len;
 
-    if (0 >= snprintf((char *)(&buffer[2]), (GREET_BUF_LEN - 2), "%s", proto_state->name)) {
+    if (0 >= snprintf((char *)(&buffer[HELLO_HDR_LEN]), NAME_MAX, "%s", proto_state->name)) {
         debug_print("Snprintf failed\n");
         close(proto_state->connfd);
         return -1;
@@ -324,27 +383,28 @@ int greet_server(pstate_t *proto_state) {
 
     display_output("\nSending client hello... ");
 
-    if (0 != send_all(proto_state->connfd, buffer, (proto_state->name_len + 2))) {
+    if (0 != send_all(proto_state->connfd, buffer, (proto_state->name_len + HELLO_HDR_LEN))) {
         close(proto_state->connfd);
         return -1;
     }
 
-    // Ack should mirror the greeting, just with a SERVER_ACK code.
-    if (0 != recv_all(proto_state->connfd, ack_buffer, 2)) {
+    // Ack should mirror the greeting with server/group name.
+    if (0 != recv_all(proto_state->connfd, ack_buffer, HELLO_HDR_LEN)) {
         close(proto_state->connfd);
         return -1;
     }
 
-    if (SERVER_ACK != ack_buffer[0] || proto_state->name_len != ack_buffer[1]) {
+    if (SERVER_ACK != ack_buffer[0]) {
         close(proto_state->connfd);
         return -1;
     }
 
-    if (0 != recv_all(proto_state->connfd, &ack_buffer[2], proto_state->name_len)
-        || 0 != memcmp(&ack_buffer[2], proto_state->name, proto_state->name_len)) {
+    if (0 != recv_all(proto_state->connfd, &ack_buffer[HELLO_HDR_LEN], ack_buffer[1])) {
         close(proto_state->connfd);
         return -1;
     }
+
+    (void)memcpy(proto_state->server_name, &ack_buffer[HELLO_HDR_LEN], ack_buffer[1]);
 
     return 0;
 }
@@ -357,6 +417,8 @@ int greet_server(pstate_t *proto_state) {
  * @returns 0 on success, non-zero on error.
  */
 int proto_setup(pstate_t *proto_state) {
+    assert(NULL != proto_state);
+
     display_output(
         KONATA_ART
         "            Welcome to ProtoChat!\n\n"
@@ -384,7 +446,157 @@ int proto_setup(pstate_t *proto_state) {
         return 1;
     }
 
-    display_output("client hello successful!\n\n");
+    display_output(
+        "client hello successful!\n"
+        DISPLAY_DELIMITER
+        "Welcome to %s!\n\n"
+        "NOTE: basic commands available are:\n/quit\n/refresh\n"
+        DISPLAY_DELIMITER,
+        proto_state->server_name
+    );
 
     return 0;
+}
+
+void handle_chat_message(pstate_t *proto_state, char *io_buffer) {
+    uint8_t name_len = io_buffer[BASE_HDR_LEN];
+    char *chatter_name = &io_buffer[(BASE_HDR_LEN + sizeof(name_len))];
+    char *msg = &io_buffer[(BASE_HDR_LEN + sizeof(name_len) + name_len)];
+
+    display_output("%s\n%s\n\n", chatter_name, msg);
+}
+
+void handle_disconnect_message(pstate_t *proto_state, char *io_buffer) {
+    uint8_t name_len = io_buffer[BASE_HDR_LEN];
+    char *chatter_name = &io_buffer[(BASE_HDR_LEN + sizeof(name_len))];
+
+    display_output("%s has disconnected.\n\n");
+}
+
+int get_messages(pstate_t *proto_state, char *io_buffer) {
+    assert(NULL != proto_state);
+    assert(NULL != io_buffer);
+
+    while (1) {
+        // Recv basic task header
+        fd_set rfds;
+        struct timeval tv = {0, 1000}; // 1 ms
+
+        FD_ZERO(&rfds);
+        FD_SET(proto_state->connfd, &rfds);
+
+        // Guarantee there is at least one packet before we block on recv
+        display_output("Selecting\n");
+        int select_ret = select(proto_state->connfd + 1, &rfds, NULL, NULL, &tv);
+        display_output("Past select\n");
+        if (0 > select_ret) {
+            return -1;
+        }
+        if (0 == select_ret) {
+            break;
+        }
+
+        if (0 != recv_all(proto_state->connfd, io_buffer, BASE_HDR_LEN)) {
+            return -1;
+        }
+    
+        uint8_t task_code = io_buffer[0];
+        uint16_t data_len = pop_short(&io_buffer[1]);
+    
+        if (0 != recv_all(proto_state->connfd, io_buffer, data_len)) {
+            return -1;
+        }
+    
+        switch (task_code) {
+        case CHAT_MESSAGE: {
+            handle_chat_message(proto_state, io_buffer);
+            break;
+        }
+        case CLIENT_DISCONNECT: {
+            handle_disconnect_message(proto_state, io_buffer);
+            break;
+        }
+        default: {
+            display_output("\nGot bad task code from server.\n");
+            return -1;
+        }
+        }
+    }
+
+    return 0;
+}
+
+int send_current_message(pstate_t *proto_state, char *io_buffer, const uint16_t msg_index) {
+    assert(NULL != proto_state);
+    assert(NULL != io_buffer);
+
+    size_t msg_len = strlen(&io_buffer[msg_index]);
+    size_t to_send = BASE_HDR_LEN + sizeof(proto_state->name_len) + proto_state->name_len + msg_len;
+
+    io_buffer[0] = CHAT_MESSAGE;
+    push_short(&io_buffer[1], to_send - BASE_HDR_LEN);
+    io_buffer[3] = proto_state->name_len;
+    (void)memcpy(&io_buffer[4], proto_state->name, proto_state->name_len);
+
+    return send_all(proto_state->connfd, io_buffer, to_send);
+}
+
+void send_disconnect(pstate_t *proto_state, char *io_buffer) {
+    assert(NULL != proto_state);
+    assert(NULL != io_buffer);
+
+    uint16_t data_len = BASE_HDR_LEN + sizeof(proto_state->name_len) + proto_state->name_len;
+
+    io_buffer[0] = CLIENT_DISCONNECT;
+    push_short(&io_buffer[1], data_len);
+    io_buffer[BASE_HDR_LEN] = proto_state->name_len;
+    memcpy(io_buffer, proto_state->name, proto_state->name_len);
+
+    // We're disconnecting anyway so w/e
+    (void)send_all(proto_state->connfd, io_buffer, data_len + 1);
+}
+
+void run_client(pstate_t *proto_state) {
+    assert(NULL != proto_state);
+
+    const uint16_t msg_index = BASE_HDR_LEN + sizeof(proto_state->name_len) + proto_state->name_len;
+    const uint16_t max_input = IO_BUF_LEN - msg_index;
+
+    // TODO: Make networking + IO async and remove refresh command.
+    char *io_buffer = malloc(IO_BUF_LEN);
+    if (NULL == io_buffer) {
+        return;
+    }
+
+    while (1) {
+        ssize_t input_ret = get_input_line(&io_buffer[msg_index], max_input);
+        if (0 > input_ret) {
+            display_output("\n\tMessage has too many characters.\n");
+            continue;
+        }
+        if (0 == input_ret) {
+            continue;
+        }
+
+        if (0 == strcmp(&io_buffer[msg_index], "/quit")) {
+            send_disconnect(proto_state, io_buffer);
+            break;
+        }
+        if (0 == strcmp(&io_buffer[msg_index], "/refresh")) {
+            if (0 != get_messages(proto_state, io_buffer)) {
+                break;
+            }
+            continue;
+        }
+
+        if (0 != send_current_message(proto_state, io_buffer, msg_index)
+            || 0 != get_messages(proto_state, io_buffer)) {
+            break;
+        }
+    }
+
+    memset(io_buffer, 0, IO_BUF_LEN);
+    free(io_buffer);
+
+    (void)close(proto_state->connfd);
 }

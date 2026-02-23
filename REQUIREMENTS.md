@@ -30,8 +30,7 @@ This would be a dedicated async server that serves as a middleman between all co
 ## Basic Requirements
 - Written in Python.
 - Written asynchronously.
-    - Meaning there should never be any busy waiting or lengthy blocking that could potentially prevent it from handling other activities (this includes file streaming)
-    - Would be super nice if the async was edge-triggered, would keep things efficient.
+    - Meaning there should never be any busy waiting or lengthy blocking that could potentially prevent it from handling other activities (this includes file streaming).
     - Incoming commands/messages will probably get thrown onto a queue or similar mechanism, and track which users that task still needs to send information to. Probably attempt to send to one client at a time when we pop write ready.
 - Incoming messages from one client should be broadcast to all others.
 - Should handle some basic commands, as outlined in the client requirements.
