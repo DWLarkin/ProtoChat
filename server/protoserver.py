@@ -152,8 +152,7 @@ def send_all(conn: socket.socket, data: bytes, logger: logging.Logger) -> int:
 
             bytes_sent = conn.send(to_send, 0)
             if bytes_sent == 0:
-                logger.info("Client disconnected")
-                return -1
+                raise ConnectionResetError("Client disconnected on send") from err
 
             data = data[bytes_sent:]
             total_sent += bytes_sent
@@ -162,8 +161,7 @@ def send_all(conn: socket.socket, data: bytes, logger: logging.Logger) -> int:
     except BlockingIOError:
         return total_sent
     except OSError as err:
-        logger.error(f"Send failure: {err}")
-        return -1
+        raise ConnectionAbortedError("Send failure") from err
 
 
 def recv_all(conn: socket.socket, length: int, logger: logging.Logger) -> bytes:
@@ -190,12 +188,9 @@ def recv_all(conn: socket.socket, length: int, logger: logging.Logger) -> bytes:
         except BlockingIOError:
             return all_received
         except OSError as err:
-            logger.error(f"Recv failure: {err}")
-            return bytes()
-
+            raise ConnectionAbortedError("Recv failure") from err
         if not recv_ret:
-            logger.info("Client disconnected")
-            return bytes()
+            raise ConnectionResetError("Client disconnected on recv")
 
         all_received += recv_ret
         amt_remaining -= len(recv_ret)
@@ -295,26 +290,22 @@ class ProtoClient:
         # Nothing should ever get sent here besides the client hello.
         recv_bytes = recv_all(self.conn, NetworkConstants.MAX_HELLO, self.logger)
         if not recv_bytes:
-            self.close()
-            raise ConnectionResetError("Client disconnected unexpectedly")
+            return  # IO is still blocking (tho kinda weird select popped)
 
         self.inbound_data += recv_bytes
 
         if len(self.inbound_data) >= NetworkConstants.HELLO_HDR_LEN:  # Task code and name length
             if self.inbound_data[0] != ProtocolCodes.CLIENT_HELLO:
-                self.close()
                 raise ConnectionResetError("Received bad code from invalid endpoint, closed socket")
 
             if self.inbound_data[1] > len(self.inbound_data[NetworkConstants.HELLO_HDR_LEN:]):
                 return
             if self.inbound_data[1] < len(self.inbound_data[NetworkConstants.HELLO_HDR_LEN:]):
-                self.close()
                 raise ConnectionResetError("Received bad data from invalid endpoint, closed socket")
 
             try:
                 self.name = (self.inbound_data[NetworkConstants.HELLO_HDR_LEN:]).decode("utf-8")
             except UnicodeDecodeError:
-                self.close()
                 raise ConnectionResetError("Received bad name from invalid endpoint, closed socket")
 
             self.logger.info(f"Client {self.name} has connected!")
@@ -333,7 +324,7 @@ class ProtoClient:
             self.outbound_data += server_ack
 
     def handle_chat_message(self):
-        _, _, name_len = struct.unpack(
+        _, data_len, name_len = struct.unpack(
             f"!BHB",
             self.inbound_data[:NetworkConstants.CHAT_HDR_LEN]
         )
@@ -344,10 +335,10 @@ class ProtoClient:
         try:
             decoded_name = encoded_name.decode("utf-8")
         except UnicodeDecodeError:
-            self.conn.close()
             raise ConnectionResetError("Bad data in client packet")
 
         self.broadcast_tasks.append(TaskChatMsg(decoded_name, msg))
+        self.inbound_data = self.inbound_data[(NetworkConstants.BASE_HDR_LEN + data_len):]
 
     def handle_client_disc(self) -> TaskDisconnect:
         # TODO
@@ -357,21 +348,26 @@ class ProtoClient:
         hdr_remaining = NetworkConstants.BASE_HDR_LEN - len(self.inbound_data)
         recv_bytes = recv_all(self.conn, hdr_remaining, self.logger)
         if not recv_bytes:
-            self.close()
-            raise ConnectionResetError("Client disconnected")
+            return  # IO blocking
 
         self.inbound_data += recv_bytes
 
         if len(self.inbound_data) >= NetworkConstants.BASE_HDR_LEN:
-            task_code, data_len = struct.unpack("!BH", self.inbound_data[:3])
-            data_remaining = data_len - (len(self.inbound_data) + NetworkConstants.BASE_HDR_LEN)
+            task_code, data_len = struct.unpack("!BH", self.inbound_data[:NetworkConstants.BASE_HDR_LEN])
+            self.logger.debug(f"Task code is {task_code}, data len is {data_len}")
+
+            data_remaining = data_len - (len(self.inbound_data) - NetworkConstants.BASE_HDR_LEN)
 
             recv_bytes = recv_all(self.conn, data_remaining, self.logger)
             if not recv_bytes:
-                self.close()
-                raise ConnectionResetError("Client disconnected")
+                return  # IO blocking
+
+            self.inbound_data += recv_bytes
+
+            self.logger.debug(f"Inbound data len is {len(self.inbound_data)}, comparing against {(NetworkConstants.BASE_HDR_LEN + data_len)}")
 
             if len(self.inbound_data) >= NetworkConstants.BASE_HDR_LEN + data_len:
+                self.logger.debug("Received data, deciphering task code")
                 match task_code:
                     case ProtocolCodes.CHAT_MESSAGE:
                         self.handle_chat_message()
@@ -382,7 +378,6 @@ class ProtoClient:
                     case ProtocolCodes.FILE_DOWNLOAD:
                         pass  # TODO
                     case _:
-                        self.close()
                         raise ConnectionResetError("Invalid task code received from client")
 
     def handle_read(self):
@@ -394,9 +389,8 @@ class ProtoClient:
     def handle_write(self):
         if self.outbound_data:
             sent = send_all(self.conn, self.outbound_data, self.logger)
-            if sent == -1:
-                self.close()
-                raise ConnectionResetError("Failed to send data to client")
+            if sent <= 0:
+                return  # IO blocking
             self.outbound_data = self.outbound_data[sent:]
             return
 
@@ -468,9 +462,7 @@ class ProtoServer:
             while True:
                 rlist, wlist, xlist = self.create_select_lists()
 
-                self.logger.debug("Selecting")
                 r_ready, w_ready, x_ready = select.select(rlist, wlist, xlist)
-                self.logger.debug("Things have been selected")
                 for i, client in enumerate(self.clients):
                     try:
                         if client.conn in w_ready:
@@ -478,9 +470,10 @@ class ProtoServer:
 
                         if client.conn in r_ready:
                             client.handle_read()
-                    except ConnectionResetError:
+                    except ConnectionResetError as err:
                         # TODO: let other clients know about sudden disconnects
-                        self.logger.info(f"Removing configuration for client {client.name}")
+                        self.logger.info(f"Removing configuration for client {client.name}: {err}")
+                        self.clients[i].close()
                         self.clients.pop(i)
 
                     if client.conn in x_ready:
