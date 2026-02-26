@@ -463,7 +463,7 @@ void handle_chat_message(pstate_t *proto_state, char *io_buffer) {
     char *chatter_name = &io_buffer[(BASE_HDR_LEN + sizeof(name_len))];
     char *msg = &io_buffer[(BASE_HDR_LEN + sizeof(name_len) + name_len)];
 
-    display_output("%s\n%s\n\n", chatter_name, msg);
+    display_output("%s:\n%s\n\n", chatter_name, msg);
 }
 
 void handle_disconnect_message(pstate_t *proto_state, char *io_buffer) {
@@ -503,10 +503,10 @@ int get_messages(pstate_t *proto_state, char *io_buffer) {
         uint8_t task_code = io_buffer[0];
         uint16_t data_len = pop_short(&io_buffer[1]);
     
-        if (0 != recv_all(proto_state->connfd, io_buffer, data_len)) {
+        if (0 != recv_all(proto_state->connfd, &io_buffer[BASE_HDR_LEN], data_len)) {
             return -1;
         }
-    
+
         switch (task_code) {
         case CHAT_MESSAGE: {
             handle_chat_message(proto_state, io_buffer);
@@ -583,14 +583,20 @@ void run_client(pstate_t *proto_state) {
             break;
         }
         if (0 == strcmp(&io_buffer[msg_index], "/refresh")) {
+            // Zero input before we print out messages.
+            (void)memset(io_buffer, 0, IO_BUF_LEN);
             if (0 != get_messages(proto_state, io_buffer)) {
                 break;
             }
             continue;
         }
 
-        if (0 != send_current_message(proto_state, io_buffer, msg_index)
-            || 0 != get_messages(proto_state, io_buffer)) {
+        if (0 != send_current_message(proto_state, io_buffer, msg_index)) {
+            break;
+        }
+
+        (void)memset(io_buffer, 0, IO_BUF_LEN);
+        if (0 != get_messages(proto_state, io_buffer)) {
             break;
         }
     }

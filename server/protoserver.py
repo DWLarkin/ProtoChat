@@ -329,7 +329,7 @@ class ProtoClient:
             self.inbound_data[:NetworkConstants.CHAT_HDR_LEN]
         )
 
-        encoded_name = self.inbound_data[NetworkConstants.CHAT_HDR_LEN:name_len]
+        encoded_name = self.inbound_data[NetworkConstants.CHAT_HDR_LEN:(NetworkConstants.CHAT_HDR_LEN + name_len)]
         msg = self.inbound_data[(NetworkConstants.CHAT_HDR_LEN + name_len):]
 
         try:
@@ -337,6 +337,7 @@ class ProtoClient:
         except UnicodeDecodeError:
             raise ConnectionResetError("Bad data in client packet")
 
+        self.logger.debug(f"Appending task with bytes {TaskChatMsg(decoded_name, msg).pack().hex(sep=" ")}")
         self.broadcast_tasks.append(TaskChatMsg(decoded_name, msg))
         self.inbound_data = self.inbound_data[(NetworkConstants.BASE_HDR_LEN + data_len):]
 
