@@ -2,14 +2,17 @@ cmake_minimum_required(VERSION 3.20)
 
 project(
     client
-    VERSION 0.1.0
+    VERSION 1.0.0
     LANGUAGES C
 )
 
 add_executable(
     ${PROJECT_NAME}
     "src/main.c"
-    "src/protochat.c"
+    "src/protoclient.c"
+    "src/setup.c"
+    "src/input_output.c"
+    "src/networking.c"
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE include)

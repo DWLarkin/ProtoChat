@@ -7,10 +7,8 @@ import select
 import socket
 import struct
 import sys
-import uuid
 
 from enum import IntEnum, auto
-from typing import Optional
 
 
 class NetworkConstants(IntEnum):
@@ -28,6 +26,7 @@ class ProtocolCodes(IntEnum):
     SERVER_ACK = auto()
     CHAT_MESSAGE = auto()
     CLIENT_DISCONNECT = auto()
+    CLIENT_LOST = auto()
     FILE_UPLOAD = auto()
     FILE_DOWNLOAD = auto()
     OUT_OF_BOUNDS = auto()
@@ -250,9 +249,9 @@ class TaskChatMsg(Task):
 class TaskDisconnect(Task):
     """Header + payload handler for client disconnections."""
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, lost_connection: bool):
         """Initializes with inherent task code and name."""
-        super().__init__(ProtocolCodes.CLIENT_DISCONNECT)
+        super().__init__(ProtocolCodes.CLIENT_LOST if lost_connection else ProtocolCodes.CLIENT_DISCONNECT)
         self.name = name
 
     def pack(self) -> bytes:
@@ -313,6 +312,7 @@ class ProtoClient:
         self.outbound_data = bytearray()
         self.pending_tasks: list[Task] = []
         self.broadcast_tasks: list[Task] = []
+        self.disconnected = False
         self.logger = logger
 
     def handle_client_hello(self):
@@ -388,7 +388,7 @@ class ProtoClient:
             (NetworkConstants.BASE_HDR_LEN + data_len) :
         ]
 
-    def handle_client_disc(self) -> TaskDisconnect:
+    def handle_client_disc(self):
         # Disconnect also comes with name, making the header same as chat.
         _, data_len, name_len = struct.unpack(
             f"!BHB", self.inbound_data[: NetworkConstants.CHAT_HDR_LEN]
@@ -403,10 +403,11 @@ class ProtoClient:
         except UnicodeDecodeError:
             raise ConnectionResetError("Bad data in client packet")
 
-        self.broadcast_tasks.append(TaskDisconnect(decoded_name))
+        self.broadcast_tasks.append(TaskDisconnect(decoded_name, False))
         self.inbound_data = self.inbound_data[
             (NetworkConstants.BASE_HDR_LEN + data_len) :
         ]
+        self.disconnected = True
 
     def handle_inbound_task(self):
         hdr_remaining = NetworkConstants.BASE_HDR_LEN - len(self.inbound_data)
@@ -548,7 +549,9 @@ class ProtoServer:
                         self.logger.info(
                             f"Removing configuration for client {client.name}: {err}"
                         )
-                        self.broadcast_to_all(TaskDisconnect(client.name), client)
+                        # Don't want to duplicate disconnect messages
+                        if client.disconnected is False:
+                            self.broadcast_to_all(TaskDisconnect(client.name, True), client)
                         self.clients[i].close()
                         self.clients.pop(i)
 
@@ -556,7 +559,8 @@ class ProtoServer:
                         self.logger.error(
                             f"Client {client.name} had an unexpected socket error"
                         )
-                        self.broadcast_to_all(TaskDisconnect(client.name), client)
+                        if client.disconnected is False:
+                            self.broadcast_to_all(TaskDisconnect(client.name, True), client)
                         client.close()
                         self.clients.pop(i)
 

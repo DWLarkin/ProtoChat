@@ -1,6 +1,7 @@
-#include "protochat.h"
+#include "common.h"
+#include "setup.h"
+#include "protoclient.h"
 
-#include <stdio.h>
 #include <stdlib.h>
 
 int main(void) {
