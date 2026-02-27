@@ -7,15 +7,16 @@ These are clients which users will interact with in order to connect to dedicate
 - Written in C (this is more for demonstration purposes, preferably this would use a different language on final version.)
 - Ability to send messages with standard Unicode content (symbols, emojis, etc.)
     - Should also receive and display these as expected.
-- Ability to upload files to and download from the server.
 - Notifications to all connected users when a new user connects, or a current one disconnects.
-- Statically compiled for reasons similar to those for writing in C.
 - Anonymous, ephemeral connections; will prompt a user for a display name upon launch and send that over the wire.
-- Support various commands, both fun and administrative (/confetti, /kick, /files, etc.)
+- Support a few basic commands.
 - Print messages/output directly to terminal.
 
 ## Extended Requirements
 - Make it look purdy using ncurses.
+    - Add async to client and remove /refresh.
+- Ability to upload files to and download from the server.
+- Support various commands, both fun and administrative (/confetti, /kick, /files, etc.)
 - Secure communications with either TLS or QUIC.
 - Support Signal protocol for user-to-user encrypted comms.
 - Persistent users and credentialing.
@@ -25,7 +26,7 @@ These are clients which users will interact with in order to connect to dedicate
 # Server
 
 ## Overview
-This would be a dedicated async server that serves as a middleman between all communications. The basic requirement implementation would have nothing persistent, so user connections would be ephemeral and anonymous other than required connection info and the username that's passed in (plus files will have to unlinked on server shutdown). If fully extended, should have secure and persistent configurations for both the current runtime as well as active clients.
+This would be a dedicated async server that serves as a middleman between all communications. The basic requirement implementation would have nothing persistent, so user connections would be ephemeral and anonymous other than required connection info and the username that's passed in. If fully extended, should have secure and persistent configurations for both the current runtime as well as active clients.
 
 ## Basic Requirements
 - Written in Python.
@@ -33,11 +34,10 @@ This would be a dedicated async server that serves as a middleman between all co
     - Meaning there should never be any busy waiting or lengthy blocking that could potentially prevent it from handling other activities (this includes file streaming).
     - Incoming commands/messages will probably get thrown onto a queue or similar mechanism, and track which users that task still needs to send information to. Probably attempt to send to one client at a time when we pop write ready.
 - Incoming messages from one client should be broadcast to all others.
-- Should handle some basic commands, as outlined in the client requirements.
-- Once uploaded, files should be stored on the server's local filesystem for later client downloading.
 - Basic server configuration available via arguments.
 
 ## Extended Requirements
+- Once uploaded, files should be stored on the server's local filesystem for later client downloading.
 - Persistent user authentication.
 - TLS/QUIC connections.
 - Support for Signal protocol.
