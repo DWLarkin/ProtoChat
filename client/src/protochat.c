@@ -154,8 +154,6 @@ int recv_all(int sockfd, void *buf, size_t len) {
     size_t total_received = 0;
     uint8_t *byte_buf = buf;
 
-    display_output("Trying to call recv for %zu bytes\n", len);
-
     if (0 == len) {
         return 0;
     }
@@ -169,7 +167,6 @@ int recv_all(int sockfd, void *buf, size_t len) {
             return -1;
         }
 
-        display_output("Received bytes\n");
         total_received += recv_ret;
     }
 
@@ -458,6 +455,12 @@ int proto_setup(pstate_t *proto_state) {
     return 0;
 }
 
+void handle_new_client(pstate_t *proto_state, char *io_buffer) {
+    char *chatter_name = &io_buffer[(BASE_HDR_LEN + sizeof(uint8_t))];
+
+    display_output("%s has joined the chat.\n\n", chatter_name);
+}
+
 void handle_chat_message(pstate_t *proto_state, char *io_buffer) {
     uint8_t name_len = io_buffer[BASE_HDR_LEN];
     char *chatter_name = &io_buffer[(BASE_HDR_LEN + sizeof(name_len))];
@@ -467,10 +470,9 @@ void handle_chat_message(pstate_t *proto_state, char *io_buffer) {
 }
 
 void handle_disconnect_message(pstate_t *proto_state, char *io_buffer) {
-    uint8_t name_len = io_buffer[BASE_HDR_LEN];
-    char *chatter_name = &io_buffer[(BASE_HDR_LEN + sizeof(name_len))];
+    char *chatter_name = &io_buffer[(BASE_HDR_LEN + sizeof(uint8_t))];
 
-    display_output("%s has disconnected.\n\n");
+    display_output("%s has disconnected.\n\n", chatter_name);
 }
 
 int get_messages(pstate_t *proto_state, char *io_buffer) {
@@ -485,10 +487,11 @@ int get_messages(pstate_t *proto_state, char *io_buffer) {
         FD_ZERO(&rfds);
         FD_SET(proto_state->connfd, &rfds);
 
+        // Zero input before we print out messages.
+        (void)memset(io_buffer, 0, IO_BUF_LEN);
+
         // Guarantee there is at least one packet before we block on recv
-        display_output("Selecting\n");
         int select_ret = select(proto_state->connfd + 1, &rfds, NULL, NULL, &tv);
-        display_output("Past select\n");
         if (0 > select_ret) {
             return -1;
         }
@@ -508,6 +511,10 @@ int get_messages(pstate_t *proto_state, char *io_buffer) {
         }
 
         switch (task_code) {
+        case CLIENT_HELLO: {
+            handle_new_client(proto_state, io_buffer);
+            break;
+        }
         case CHAT_MESSAGE: {
             handle_chat_message(proto_state, io_buffer);
             break;
@@ -545,15 +552,16 @@ void send_disconnect(pstate_t *proto_state, char *io_buffer) {
     assert(NULL != proto_state);
     assert(NULL != io_buffer);
 
-    uint16_t data_len = BASE_HDR_LEN + sizeof(proto_state->name_len) + proto_state->name_len;
+    memset(io_buffer, 0, IO_BUF_LEN);
+    uint16_t data_len = sizeof(proto_state->name_len) + proto_state->name_len;
 
     io_buffer[0] = CLIENT_DISCONNECT;
     push_short(&io_buffer[1], data_len);
     io_buffer[BASE_HDR_LEN] = proto_state->name_len;
-    memcpy(io_buffer, proto_state->name, proto_state->name_len);
+    memcpy(&io_buffer[(BASE_HDR_LEN + sizeof(proto_state->name_len))], proto_state->name, proto_state->name_len);
 
     // We're disconnecting anyway so w/e
-    (void)send_all(proto_state->connfd, io_buffer, data_len + 1);
+    (void)send_all(proto_state->connfd, io_buffer, (BASE_HDR_LEN + data_len));
 }
 
 void run_client(pstate_t *proto_state) {
@@ -578,13 +586,14 @@ void run_client(pstate_t *proto_state) {
             continue;
         }
 
+        // Create a little spacer.
+        display_output("\n");
+
         if (0 == strcmp(&io_buffer[msg_index], "/quit")) {
             send_disconnect(proto_state, io_buffer);
             break;
         }
         if (0 == strcmp(&io_buffer[msg_index], "/refresh")) {
-            // Zero input before we print out messages.
-            (void)memset(io_buffer, 0, IO_BUF_LEN);
             if (0 != get_messages(proto_state, io_buffer)) {
                 break;
             }
@@ -595,7 +604,6 @@ void run_client(pstate_t *proto_state) {
             break;
         }
 
-        (void)memset(io_buffer, 0, IO_BUF_LEN);
         if (0 != get_messages(proto_state, io_buffer)) {
             break;
         }

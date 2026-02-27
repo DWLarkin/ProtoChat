@@ -144,8 +144,6 @@ def send_all(conn: socket.socket, data: bytes, logger: logging.Logger) -> int:
     """
     total_sent = 0
 
-    logger.debug(f"Calling send with bytes {data.hex(sep=" ")}")
-
     try:
         while data:
             to_send = data[:NetworkConstants.MAX_LEN]
@@ -184,7 +182,6 @@ def recv_all(conn: socket.socket, length: int, logger: logging.Logger) -> bytes:
 
         try:
             recv_ret = conn.recv(recv_amt, 0)
-            logger.info(f"Got bytes: {recv_ret.hex(sep=" ")}")
         except BlockingIOError:
             return all_received
         except OSError as err:
@@ -220,7 +217,7 @@ class TaskChatMsg(Task):
     """Header + payload handler for chat messages."""
     
     def __init__(self, name: str, data: bytes):
-        """Initialize chat message class."""
+        """Initializes with inherent task code, name, and encoded chat message."""
         super().__init__(ProtocolCodes.CHAT_MESSAGE)
         self.name = name
         self.data = data
@@ -250,6 +247,7 @@ class TaskDisconnect(Task):
     """Header + payload handler for client disconnections."""
 
     def __init__(self, name: str):
+        """Initializes with inherent task code and name."""
         super().__init__(ProtocolCodes.CLIENT_DISCONNECT)
         self.name = name
 
@@ -271,6 +269,34 @@ class TaskDisconnect(Task):
             encoded_name
         )
 
+
+class TaskNewConnect(Task):
+    """Header + payload handler for new client connections."""
+
+    def __init__(self, name: str):
+        """Initializes with inherent task code and name."""
+        super().__init__(ProtocolCodes.CLIENT_HELLO)
+        self.name = name
+
+    def pack(self) -> bytes:
+        """Creates a connection notification packet based off provided name.
+
+        Returns:
+            The serialized new connection packet.
+
+        """
+        encoded_name = (self.name + '\x00').encode("utf-8")
+        assert len(encoded_name) <= 255
+
+        return struct.pack(
+            f"!BHB{len(encoded_name)}s",
+            self.task_type,
+            len(encoded_name) + 1,
+            len(encoded_name),
+            encoded_name
+        )
+
+
 class ProtoClient:
     """Class-based handler for ProtoChat clients."""
 
@@ -290,7 +316,7 @@ class ProtoClient:
         # Nothing should ever get sent here besides the client hello.
         recv_bytes = recv_all(self.conn, NetworkConstants.MAX_HELLO, self.logger)
         if not recv_bytes:
-            return  # IO is still blocking (tho kinda weird select popped)
+            return  # IO is still blocking
 
         self.inbound_data += recv_bytes
 
@@ -322,6 +348,7 @@ class ProtoClient:
             )
 
             self.outbound_data += server_ack
+            self.broadcast_tasks.append(TaskNewConnect(self.name))
 
     def handle_chat_message(self):
         _, data_len, name_len = struct.unpack(
@@ -337,13 +364,25 @@ class ProtoClient:
         except UnicodeDecodeError:
             raise ConnectionResetError("Bad data in client packet")
 
-        self.logger.debug(f"Appending task with bytes {TaskChatMsg(decoded_name, msg).pack().hex(sep=" ")}")
         self.broadcast_tasks.append(TaskChatMsg(decoded_name, msg))
         self.inbound_data = self.inbound_data[(NetworkConstants.BASE_HDR_LEN + data_len):]
 
     def handle_client_disc(self) -> TaskDisconnect:
-        # TODO
-        self.logger.info("Doing disconnect things")
+        # Disconnect also comes with name, making the header same as chat.
+        _, data_len, name_len = struct.unpack(
+            f"!BHB",
+            self.inbound_data[:NetworkConstants.CHAT_HDR_LEN]
+        )
+
+        encoded_name = self.inbound_data[NetworkConstants.CHAT_HDR_LEN:(NetworkConstants.CHAT_HDR_LEN + name_len)]
+
+        try:
+            decoded_name = encoded_name.decode("utf-8")
+        except UnicodeDecodeError:
+            raise ConnectionResetError("Bad data in client packet")
+
+        self.broadcast_tasks.append(TaskDisconnect(decoded_name))
+        self.inbound_data = self.inbound_data[(NetworkConstants.BASE_HDR_LEN + data_len):]
 
     def handle_inbound_task(self):
         hdr_remaining = NetworkConstants.BASE_HDR_LEN - len(self.inbound_data)
@@ -365,10 +404,7 @@ class ProtoClient:
 
             self.inbound_data += recv_bytes
 
-            self.logger.debug(f"Inbound data len is {len(self.inbound_data)}, comparing against {(NetworkConstants.BASE_HDR_LEN + data_len)}")
-
             if len(self.inbound_data) >= NetworkConstants.BASE_HDR_LEN + data_len:
-                self.logger.debug("Received data, deciphering task code")
                 match task_code:
                     case ProtocolCodes.CHAT_MESSAGE:
                         self.handle_chat_message()
@@ -448,13 +484,16 @@ class ProtoServer:
 
         return (rlist, wlist, xlist)
 
-    def broadcast_tasks(self):
-        # TODO: This could def be more efficient when I get time.
+    def broadcast_to_all(self, bcast_task: Task, originator: ProtoClient):
         for client in self.clients:
-            broadcast_recipients = [recipient for recipient in self.clients if recipient.name != client.name]
+            if client.name == originator.name:
+                continue
+            client.pending_tasks.append(bcast_task)
+
+    def scan_for_broadcasts(self):
+        for client in self.clients:
             for broadcast in client.broadcast_tasks:
-                for recipient in broadcast_recipients:
-                    recipient.pending_tasks.append(broadcast)
+                self.broadcast_to_all(broadcast, client)
             client.broadcast_tasks = []
 
     def run_server(self):
@@ -471,14 +510,15 @@ class ProtoServer:
 
                         if client.conn in r_ready:
                             client.handle_read()
-                    except ConnectionResetError as err:
-                        # TODO: let other clients know about sudden disconnects
+                    except (ConnectionResetError, ConnectionAbortedError) as err:
                         self.logger.info(f"Removing configuration for client {client.name}: {err}")
+                        self.broadcast_to_all(TaskDisconnect(client.name), client)
                         self.clients[i].close()
                         self.clients.pop(i)
 
                     if client.conn in x_ready:
                         self.logger.error(f"Client {client.name} had an unexpected socket error")
+                        self.broadcast_to_all(TaskDisconnect(client.name), client)
                         client.close()
                         self.clients.pop(i)
 
@@ -496,7 +536,7 @@ class ProtoServer:
                     self.close()
                     break
 
-                self.broadcast_tasks()
+                self.scan_for_broadcasts()
 
         except KeyboardInterrupt:
             self.close()
