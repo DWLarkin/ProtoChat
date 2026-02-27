@@ -8,28 +8,7 @@ import socket
 import struct
 import sys
 
-from enum import IntEnum, auto
-
-
-class NetworkConstants(IntEnum):
-    MAX_LEN = 4096
-    MAX_NAME = 255  # Including \0, when it comes to outbound
-    HELLO_HDR_LEN = 2
-    MAX_HELLO = MAX_NAME + HELLO_HDR_LEN
-    BASE_HDR_LEN = 3
-    CHAT_HDR_LEN = BASE_HDR_LEN + 1
-
-
-class ProtocolCodes(IntEnum):
-    INVALID_CODE = 0
-    CLIENT_HELLO = auto()
-    SERVER_ACK = auto()
-    CHAT_MESSAGE = auto()
-    CLIENT_DISCONNECT = auto()
-    CLIENT_LOST = auto()
-    FILE_UPLOAD = auto()
-    FILE_DOWNLOAD = auto()
-    OUT_OF_BOUNDS = auto()
+from networking import NetworkConstants, ProtocolCodes, recv_all, send_all
 
 
 def validate_groupname(user_input):
@@ -130,75 +109,6 @@ def check_address_family(str_addr: str) -> socket.AddressFamily:
     raise ValueError("String does not contain an address")
 
 
-def send_all(conn: socket.socket, data: bytes, logger: logging.Logger) -> int:
-    """Attempts to send all provided data.
-
-    Args:
-        conn (socket.socket): The socket to send on.
-        data (bytes): The data to send.
-        logger (logging.Logger): The logger to output to.
-
-    Returns:
-        The number of bytes sent, or -1 on disconnection or send error.
-
-    """
-    total_sent = 0
-
-    try:
-        while data:
-            to_send = data[: NetworkConstants.MAX_LEN]
-
-            bytes_sent = conn.send(to_send, 0)
-            if bytes_sent == 0:
-                raise ConnectionResetError("Client disconnected on send") from err
-
-            data = data[bytes_sent:]
-            total_sent += bytes_sent
-
-        return total_sent
-    except BlockingIOError:
-        return total_sent
-    except OSError as err:
-        raise ConnectionAbortedError("Send failure") from err
-
-
-def recv_all(conn: socket.socket, length: int, logger: logging.Logger) -> bytes:
-    """Attempts to recv all requested bytes.
-
-    Args:
-        conn (socket.socket): The socket to recv on.
-        length (int): The number of bytes to recv.
-        logger (logging.Logger): The logger to output to.
-
-    Returns:
-        Whatever bytes are received, or no bytes on socket disconnect/error.
-
-    """
-    all_received = bytearray()
-    amt_remaining = length
-
-    while amt_remaining > 0:
-        recv_amt = (
-            NetworkConstants.MAX_LEN
-            if amt_remaining > NetworkConstants.MAX_LEN
-            else amt_remaining
-        )
-
-        try:
-            recv_ret = conn.recv(recv_amt, 0)
-        except BlockingIOError:
-            return all_received
-        except OSError as err:
-            raise ConnectionAbortedError("Recv failure") from err
-        if not recv_ret:
-            raise ConnectionResetError("Client disconnected on recv")
-
-        all_received += recv_ret
-        amt_remaining -= len(recv_ret)
-
-    return all_received
-
-
 # TODO: see if I can convert these to dataclasses
 class Task:
     """Base class for packet types for inheritance + typehinting."""
@@ -251,7 +161,11 @@ class TaskDisconnect(Task):
 
     def __init__(self, name: str, lost_connection: bool):
         """Initializes with inherent task code and name."""
-        super().__init__(ProtocolCodes.CLIENT_LOST if lost_connection else ProtocolCodes.CLIENT_DISCONNECT)
+        super().__init__(
+            ProtocolCodes.CLIENT_LOST
+            if lost_connection
+            else ProtocolCodes.CLIENT_DISCONNECT
+        )
         self.name = name
 
     def pack(self) -> bytes:
@@ -521,7 +435,7 @@ class ProtoServer:
 
     def broadcast_to_all(self, bcast_task: Task, originator: ProtoClient):
         for client in self.clients:
-            if client.name == originator.name:
+            if client == originator:
                 continue
             client.pending_tasks.append(bcast_task)
 
@@ -551,7 +465,9 @@ class ProtoServer:
                         )
                         # Don't want to duplicate disconnect messages
                         if client.disconnected is False:
-                            self.broadcast_to_all(TaskDisconnect(client.name, True), client)
+                            self.broadcast_to_all(
+                                TaskDisconnect(client.name, True), client
+                            )
                         self.clients[i].close()
                         self.clients.pop(i)
 
@@ -560,7 +476,9 @@ class ProtoServer:
                             f"Client {client.name} had an unexpected socket error"
                         )
                         if client.disconnected is False:
-                            self.broadcast_to_all(TaskDisconnect(client.name, True), client)
+                            self.broadcast_to_all(
+                                TaskDisconnect(client.name, True), client
+                            )
                         client.close()
                         self.clients.pop(i)
 
