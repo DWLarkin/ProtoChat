@@ -50,3 +50,4 @@ This would be a dedicated async server that serves as a middleman between all co
 Probably will not get around to this with how little time I have.
 - Would be nice to have some good C unit testing via GoogleTest to make sure a lot of the isolated logic works reliably.
 - Functional/integration testing using PyTest, where we could spin up + interact with both clients and servers via a handy API.
+- Also not really testing, but would be nice to run stuff through a pipeline, linters, etc.
