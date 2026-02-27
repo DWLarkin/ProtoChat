@@ -17,11 +17,12 @@
 
 /**
  * @brief Displays some string output to the user.
- * 
+ *
  * @param[in] fmt The format string to pass on to the output mechanism.
  * @param[in] args Any arguments corresponding to the format string.
- * 
- * @todo This is a simple print wrapper atm, will probably change later with ncurses.
+ *
+ * @todo This is a simple print wrapper atm, will probably change later with
+ * ncurses.
  */
 void display_output(const char *fmt, ...) {
     assert(NULL != fmt);
@@ -35,9 +36,9 @@ void display_output(const char *fmt, ...) {
 
 /**
  * @brief Flushes stdin.
- * 
+ *
  * @returns 0 on success, non-zero on error.
- * 
+ *
  * @todo Rework when error codes are available later.
  */
 int flush_stdin(void) {
@@ -54,18 +55,19 @@ int flush_stdin(void) {
         }
 
         break;
-    } while(1);
+    } while (1);
 
     return 0;
 }
 
 /**
  * @brief Gets a single line of input from the user.
- * 
+ *
  * @param[out] input_buffer The buffer to store the incoming input in.
  * @param[in] max_len The length of the buffer.
- * 
- * @todo This will probably need some expansion/redesign later for ncurses + input variety.
+ *
+ * @todo This will probably need some expansion/redesign later for ncurses +
+ * input variety.
  */
 ssize_t get_input_line(char *input_buffer, size_t max_len) {
     assert(NULL != input_buffer);
@@ -96,7 +98,8 @@ ssize_t get_input_line(char *input_buffer, size_t max_len) {
         return -1;
     }
 
-    // Since we're currently constraining max_len to int, this cast always works.
+    // Since we're currently constraining max_len to int, this cast always
+    // works.
     return (ssize_t)current_len;
 }
 
@@ -133,7 +136,8 @@ int send_all(int sockfd, void *buf, size_t len) {
     }
 
     while (total_sent < len) {
-        size_t to_send = ((len - total_sent) > SEND_MAX) ? SEND_MAX : len - total_sent;
+        size_t to_send =
+            ((len - total_sent) > SEND_MAX) ? SEND_MAX : len - total_sent;
 
         ssize_t send_ret = send(sockfd, &byte_buf[total_sent], to_send, 0);
         if (0 >= send_ret) {
@@ -159,7 +163,9 @@ int recv_all(int sockfd, void *buf, size_t len) {
     }
 
     while (total_received < len) {
-        size_t to_recv = ((len - total_received) > SEND_MAX) ? SEND_MAX : len - total_received;
+        size_t to_recv = ((len - total_received) > SEND_MAX)
+                             ? SEND_MAX
+                             : len - total_received;
 
         ssize_t recv_ret = recv(sockfd, &byte_buf[total_received], to_recv, 0);
         if (0 >= recv_ret) {
@@ -175,9 +181,9 @@ int recv_all(int sockfd, void *buf, size_t len) {
 
 /**
  * @brief Gets an address or domain name to connect to via user input.
- * 
+ *
  * @param[out] proto_state The state struct to update with gathered input.
- * 
+ *
  * @returns 0 on success, non-zero on failure.
  */
 int get_address(pstate_t *proto_state) {
@@ -186,19 +192,23 @@ int get_address(pstate_t *proto_state) {
     char response_buffer[YN_RESP_LEN]; // For the confirmation prompt.
 
     while (1) {
-        display_output("\nPlease enter an IPv4 address or domain name to connect to: ");
+        display_output(
+            "\nPlease enter an IPv4 address or domain name to connect to: ");
 
         ssize_t input_ret = get_input_line(proto_state->address, DOMAIN_MAX);
         if (0 > input_ret) {
-            display_output("\tAddress or domain is too long, you're only allotted up to 4095 characters.\n");
+            display_output(
+                "\tAddress or domain is too long, you're only allotted up "
+                "to 4095 characters.\n");
             continue;
-        }
-        else if (0 == input_ret) {
+        } else if (0 == input_ret) {
             display_output("\tA valid address or domain must be entered.\n");
             continue;
         }
 
-        display_output("\tThe address you entered is \"%s\". Is this correct? [y/N]: ", proto_state->address);
+        display_output(
+            "\tThe address you entered is \"%s\". Is this correct? [y/N]: ",
+            proto_state->address);
 
         input_ret = get_input_line(response_buffer, YN_RESP_LEN);
         if (1 != input_ret) {
@@ -273,7 +283,8 @@ int get_name(pstate_t *proto_state) {
     while (1) {
         display_output("\nLastly, what would you like your name to be? ");
 
-        ssize_t input_ret = get_input_line(proto_state->name, sizeof(proto_state->name));
+        ssize_t input_ret =
+            get_input_line(proto_state->name, sizeof(proto_state->name));
         if (0 > input_ret) {
             display_output("\tName has too many character (limit is 255).\n");
             continue;
@@ -296,7 +307,8 @@ int get_name(pstate_t *proto_state) {
 int create_connection(struct addrinfo *current_addr) {
     assert(NULL != current_addr);
 
-    int sockfd = socket(current_addr->ai_family, current_addr->ai_socktype, current_addr->ai_protocol);
+    int sockfd = socket(current_addr->ai_family, current_addr->ai_socktype,
+                        current_addr->ai_protocol);
     if (0 > sockfd) {
         debug_print("Socket call failed\n");
         return -1;
@@ -326,7 +338,7 @@ int attempt_addresses(pstate_t *proto_state) {
         debug_print("Unexpected error with stringifying port.\n");
         return -1;
     }
-    
+
     int status = getaddrinfo(proto_state->address, str_port, &hints, &res);
     if (0 != status) {
         display_output("\nFailed to resolve address.\n");
@@ -372,7 +384,8 @@ int greet_server(pstate_t *proto_state) {
     buffer[0] = CLIENT_HELLO;
     buffer[1] = proto_state->name_len;
 
-    if (0 >= snprintf((char *)(&buffer[HELLO_HDR_LEN]), NAME_MAX, "%s", proto_state->name)) {
+    if (0 >= snprintf((char *)(&buffer[HELLO_HDR_LEN]), NAME_MAX, "%s",
+                      proto_state->name)) {
         debug_print("Snprintf failed\n");
         close(proto_state->connfd);
         return -1;
@@ -380,7 +393,8 @@ int greet_server(pstate_t *proto_state) {
 
     display_output("\nSending client hello... ");
 
-    if (0 != send_all(proto_state->connfd, buffer, (proto_state->name_len + HELLO_HDR_LEN))) {
+    if (0 != send_all(proto_state->connfd, buffer,
+                      (proto_state->name_len + HELLO_HDR_LEN))) {
         close(proto_state->connfd);
         return -1;
     }
@@ -396,21 +410,23 @@ int greet_server(pstate_t *proto_state) {
         return -1;
     }
 
-    if (0 != recv_all(proto_state->connfd, &ack_buffer[HELLO_HDR_LEN], ack_buffer[1])) {
+    if (0 != recv_all(proto_state->connfd, &ack_buffer[HELLO_HDR_LEN],
+                      ack_buffer[1])) {
         close(proto_state->connfd);
         return -1;
     }
 
-    (void)memcpy(proto_state->server_name, &ack_buffer[HELLO_HDR_LEN], ack_buffer[1]);
+    (void)memcpy(proto_state->server_name, &ack_buffer[HELLO_HDR_LEN],
+                 ack_buffer[1]);
 
     return 0;
 }
 
 /**
  * @brief Gets user input for basic client configuration + connection info.
- * 
+ *
  * @param[out] proto_state The state struct to update with gathered input.
- * 
+ *
  * @returns 0 on success, non-zero on error.
  */
 int proto_setup(pstate_t *proto_state) {
@@ -419,8 +435,7 @@ int proto_setup(pstate_t *proto_state) {
     display_output(
         KONATA_ART
         "            Welcome to ProtoChat!\n\n"
-        "Note: The program setup may be terminated at any time by Ctrl+C!\n"
-    );
+        "Note: The program setup may be terminated at any time by Ctrl+C!\n");
 
     if (0 != get_address(proto_state)) {
         return 1;
@@ -443,14 +458,11 @@ int proto_setup(pstate_t *proto_state) {
         return 1;
     }
 
-    display_output(
-        "client hello successful!\n"
-        DISPLAY_DELIMITER
-        "Welcome to %s!\n\n"
-        "NOTE: basic commands available are:\n/quit\n/refresh\n"
-        DISPLAY_DELIMITER,
-        proto_state->server_name
-    );
+    display_output("client hello successful!\n" DISPLAY_DELIMITER
+                   "Welcome to %s!\n\n"
+                   "NOTE: basic commands available "
+                   "are:\n/quit\n/refresh\n" DISPLAY_DELIMITER,
+                   proto_state->server_name);
 
     return 0;
 }
@@ -491,7 +503,8 @@ int get_messages(pstate_t *proto_state, char *io_buffer) {
         (void)memset(io_buffer, 0, IO_BUF_LEN);
 
         // Guarantee there is at least one packet before we block on recv
-        int select_ret = select(proto_state->connfd + 1, &rfds, NULL, NULL, &tv);
+        int select_ret =
+            select(proto_state->connfd + 1, &rfds, NULL, NULL, &tv);
         if (0 > select_ret) {
             return -1;
         }
@@ -502,11 +515,12 @@ int get_messages(pstate_t *proto_state, char *io_buffer) {
         if (0 != recv_all(proto_state->connfd, io_buffer, BASE_HDR_LEN)) {
             return -1;
         }
-    
+
         uint8_t task_code = io_buffer[0];
         uint16_t data_len = pop_short(&io_buffer[1]);
-    
-        if (0 != recv_all(proto_state->connfd, &io_buffer[BASE_HDR_LEN], data_len)) {
+
+        if (0 !=
+            recv_all(proto_state->connfd, &io_buffer[BASE_HDR_LEN], data_len)) {
             return -1;
         }
 
@@ -533,12 +547,14 @@ int get_messages(pstate_t *proto_state, char *io_buffer) {
     return 0;
 }
 
-int send_current_message(pstate_t *proto_state, char *io_buffer, const uint16_t msg_index) {
+int send_current_message(pstate_t *proto_state, char *io_buffer,
+                         const uint16_t msg_index) {
     assert(NULL != proto_state);
     assert(NULL != io_buffer);
 
     size_t msg_len = strlen(&io_buffer[msg_index]);
-    size_t to_send = BASE_HDR_LEN + sizeof(proto_state->name_len) + proto_state->name_len + msg_len;
+    size_t to_send = BASE_HDR_LEN + sizeof(proto_state->name_len) +
+                     proto_state->name_len + msg_len;
 
     io_buffer[0] = CHAT_MESSAGE;
     push_short(&io_buffer[1], to_send - BASE_HDR_LEN);
@@ -558,7 +574,8 @@ void send_disconnect(pstate_t *proto_state, char *io_buffer) {
     io_buffer[0] = CLIENT_DISCONNECT;
     push_short(&io_buffer[1], data_len);
     io_buffer[BASE_HDR_LEN] = proto_state->name_len;
-    memcpy(&io_buffer[(BASE_HDR_LEN + sizeof(proto_state->name_len))], proto_state->name, proto_state->name_len);
+    memcpy(&io_buffer[(BASE_HDR_LEN + sizeof(proto_state->name_len))],
+           proto_state->name, proto_state->name_len);
 
     // We're disconnecting anyway so w/e
     (void)send_all(proto_state->connfd, io_buffer, (BASE_HDR_LEN + data_len));
@@ -567,7 +584,8 @@ void send_disconnect(pstate_t *proto_state, char *io_buffer) {
 void run_client(pstate_t *proto_state) {
     assert(NULL != proto_state);
 
-    const uint16_t msg_index = BASE_HDR_LEN + sizeof(proto_state->name_len) + proto_state->name_len;
+    const uint16_t msg_index =
+        BASE_HDR_LEN + sizeof(proto_state->name_len) + proto_state->name_len;
     const uint16_t max_input = IO_BUF_LEN - msg_index;
 
     // TODO: Make networking + IO async and remove refresh command.

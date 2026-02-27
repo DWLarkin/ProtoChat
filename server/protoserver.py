@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Defines and potentially runs a ProtoChat server."""
+
 import argparse
 import logging
 import select
@@ -146,7 +147,7 @@ def send_all(conn: socket.socket, data: bytes, logger: logging.Logger) -> int:
 
     try:
         while data:
-            to_send = data[:NetworkConstants.MAX_LEN]
+            to_send = data[: NetworkConstants.MAX_LEN]
 
             bytes_sent = conn.send(to_send, 0)
             if bytes_sent == 0:
@@ -178,7 +179,11 @@ def recv_all(conn: socket.socket, length: int, logger: logging.Logger) -> bytes:
     amt_remaining = length
 
     while amt_remaining > 0:
-        recv_amt = NetworkConstants.MAX_LEN if amt_remaining > NetworkConstants.MAX_LEN else amt_remaining
+        recv_amt = (
+            NetworkConstants.MAX_LEN
+            if amt_remaining > NetworkConstants.MAX_LEN
+            else amt_remaining
+        )
 
         try:
             recv_ret = conn.recv(recv_amt, 0)
@@ -197,7 +202,6 @@ def recv_all(conn: socket.socket, length: int, logger: logging.Logger) -> bytes:
 
 # TODO: see if I can convert these to dataclasses
 class Task:
-
     """Base class for packet types for inheritance + typehinting."""
 
     def __init__(self, task_type: ProtocolCodes):
@@ -215,7 +219,7 @@ class Task:
 
 class TaskChatMsg(Task):
     """Header + payload handler for chat messages."""
-    
+
     def __init__(self, name: str, data: bytes):
         """Initializes with inherent task code, name, and encoded chat message."""
         super().__init__(ProtocolCodes.CHAT_MESSAGE)
@@ -229,7 +233,7 @@ class TaskChatMsg(Task):
             The serialized chat message packet.
 
         """
-        encoded_name = (self.name + '\x00').encode("utf-8")
+        encoded_name = (self.name + "\x00").encode("utf-8")
         assert len(encoded_name) <= 255
         assert len(self.data) <= 65535
 
@@ -258,7 +262,7 @@ class TaskDisconnect(Task):
             The serialized disconnect packet.
 
         """
-        encoded_name = (self.name + '\x00').encode("utf-8")
+        encoded_name = (self.name + "\x00").encode("utf-8")
         assert len(encoded_name) <= 255
 
         return struct.pack(
@@ -266,7 +270,7 @@ class TaskDisconnect(Task):
             self.task_type,
             len(encoded_name) + 1,
             len(encoded_name),
-            encoded_name
+            encoded_name,
         )
 
 
@@ -285,7 +289,7 @@ class TaskNewConnect(Task):
             The serialized new connection packet.
 
         """
-        encoded_name = (self.name + '\x00').encode("utf-8")
+        encoded_name = (self.name + "\x00").encode("utf-8")
         assert len(encoded_name) <= 255
 
         return struct.pack(
@@ -293,7 +297,7 @@ class TaskNewConnect(Task):
             self.task_type,
             len(encoded_name) + 1,
             len(encoded_name),
-            encoded_name
+            encoded_name,
         )
 
 
@@ -320,26 +324,40 @@ class ProtoClient:
 
         self.inbound_data += recv_bytes
 
-        if len(self.inbound_data) >= NetworkConstants.HELLO_HDR_LEN:  # Task code and name length
+        if (
+            len(self.inbound_data) >= NetworkConstants.HELLO_HDR_LEN
+        ):  # Task code and name length
             if self.inbound_data[0] != ProtocolCodes.CLIENT_HELLO:
-                raise ConnectionResetError("Received bad code from invalid endpoint, closed socket")
+                raise ConnectionResetError(
+                    "Received bad code from invalid endpoint, closed socket"
+                )
 
-            if self.inbound_data[1] > len(self.inbound_data[NetworkConstants.HELLO_HDR_LEN:]):
+            if self.inbound_data[1] > len(
+                self.inbound_data[NetworkConstants.HELLO_HDR_LEN :]
+            ):
                 return
-            if self.inbound_data[1] < len(self.inbound_data[NetworkConstants.HELLO_HDR_LEN:]):
-                raise ConnectionResetError("Received bad data from invalid endpoint, closed socket")
+            if self.inbound_data[1] < len(
+                self.inbound_data[NetworkConstants.HELLO_HDR_LEN :]
+            ):
+                raise ConnectionResetError(
+                    "Received bad data from invalid endpoint, closed socket"
+                )
 
             try:
-                self.name = (self.inbound_data[NetworkConstants.HELLO_HDR_LEN:]).decode("utf-8")
+                self.name = (
+                    self.inbound_data[NetworkConstants.HELLO_HDR_LEN :]
+                ).decode("utf-8")
             except UnicodeDecodeError:
-                raise ConnectionResetError("Received bad name from invalid endpoint, closed socket")
+                raise ConnectionResetError(
+                    "Received bad name from invalid endpoint, closed socket"
+                )
 
             self.logger.info(f"Client {self.name} has connected!")
 
             self.inbound_data = bytearray()
 
             # TODO: The ack won't really be necessary when TLS is implemented.
-            encoded_name = (self.groupname + '\x00').encode("utf-8")
+            encoded_name = (self.groupname + "\x00").encode("utf-8")
             server_ack = struct.pack(
                 f"!BB{len(encoded_name)}s",
                 ProtocolCodes.SERVER_ACK,
@@ -352,12 +370,13 @@ class ProtoClient:
 
     def handle_chat_message(self):
         _, data_len, name_len = struct.unpack(
-            f"!BHB",
-            self.inbound_data[:NetworkConstants.CHAT_HDR_LEN]
+            f"!BHB", self.inbound_data[: NetworkConstants.CHAT_HDR_LEN]
         )
 
-        encoded_name = self.inbound_data[NetworkConstants.CHAT_HDR_LEN:(NetworkConstants.CHAT_HDR_LEN + name_len)]
-        msg = self.inbound_data[(NetworkConstants.CHAT_HDR_LEN + name_len):]
+        encoded_name = self.inbound_data[
+            NetworkConstants.CHAT_HDR_LEN : (NetworkConstants.CHAT_HDR_LEN + name_len)
+        ]
+        msg = self.inbound_data[(NetworkConstants.CHAT_HDR_LEN + name_len) :]
 
         try:
             decoded_name = encoded_name.decode("utf-8")
@@ -365,16 +384,19 @@ class ProtoClient:
             raise ConnectionResetError("Bad data in client packet")
 
         self.broadcast_tasks.append(TaskChatMsg(decoded_name, msg))
-        self.inbound_data = self.inbound_data[(NetworkConstants.BASE_HDR_LEN + data_len):]
+        self.inbound_data = self.inbound_data[
+            (NetworkConstants.BASE_HDR_LEN + data_len) :
+        ]
 
     def handle_client_disc(self) -> TaskDisconnect:
         # Disconnect also comes with name, making the header same as chat.
         _, data_len, name_len = struct.unpack(
-            f"!BHB",
-            self.inbound_data[:NetworkConstants.CHAT_HDR_LEN]
+            f"!BHB", self.inbound_data[: NetworkConstants.CHAT_HDR_LEN]
         )
 
-        encoded_name = self.inbound_data[NetworkConstants.CHAT_HDR_LEN:(NetworkConstants.CHAT_HDR_LEN + name_len)]
+        encoded_name = self.inbound_data[
+            NetworkConstants.CHAT_HDR_LEN : (NetworkConstants.CHAT_HDR_LEN + name_len)
+        ]
 
         try:
             decoded_name = encoded_name.decode("utf-8")
@@ -382,7 +404,9 @@ class ProtoClient:
             raise ConnectionResetError("Bad data in client packet")
 
         self.broadcast_tasks.append(TaskDisconnect(decoded_name))
-        self.inbound_data = self.inbound_data[(NetworkConstants.BASE_HDR_LEN + data_len):]
+        self.inbound_data = self.inbound_data[
+            (NetworkConstants.BASE_HDR_LEN + data_len) :
+        ]
 
     def handle_inbound_task(self):
         hdr_remaining = NetworkConstants.BASE_HDR_LEN - len(self.inbound_data)
@@ -393,10 +417,14 @@ class ProtoClient:
         self.inbound_data += recv_bytes
 
         if len(self.inbound_data) >= NetworkConstants.BASE_HDR_LEN:
-            task_code, data_len = struct.unpack("!BH", self.inbound_data[:NetworkConstants.BASE_HDR_LEN])
+            task_code, data_len = struct.unpack(
+                "!BH", self.inbound_data[: NetworkConstants.BASE_HDR_LEN]
+            )
             self.logger.debug(f"Task code is {task_code}, data len is {data_len}")
 
-            data_remaining = data_len - (len(self.inbound_data) - NetworkConstants.BASE_HDR_LEN)
+            data_remaining = data_len - (
+                len(self.inbound_data) - NetworkConstants.BASE_HDR_LEN
+            )
 
             recv_bytes = recv_all(self.conn, data_remaining, self.logger)
             if not recv_bytes:
@@ -415,7 +443,9 @@ class ProtoClient:
                     case ProtocolCodes.FILE_DOWNLOAD:
                         pass  # TODO
                     case _:
-                        raise ConnectionResetError("Invalid task code received from client")
+                        raise ConnectionResetError(
+                            "Invalid task code received from client"
+                        )
 
     def handle_read(self):
         if self.name is None:
@@ -476,7 +506,11 @@ class ProtoServer:
 
     def create_select_lists(self) -> tuple[list, list, list]:
         rlist = [client.conn for client in self.clients]
-        wlist = [client.conn for client in self.clients if client.pending_tasks or client.outbound_data]
+        wlist = [
+            client.conn
+            for client in self.clients
+            if client.pending_tasks or client.outbound_data
+        ]
         xlist = [client.conn for client in self.clients]
 
         rlist.append(self.servsock)
@@ -511,13 +545,17 @@ class ProtoServer:
                         if client.conn in r_ready:
                             client.handle_read()
                     except (ConnectionResetError, ConnectionAbortedError) as err:
-                        self.logger.info(f"Removing configuration for client {client.name}: {err}")
+                        self.logger.info(
+                            f"Removing configuration for client {client.name}: {err}"
+                        )
                         self.broadcast_to_all(TaskDisconnect(client.name), client)
                         self.clients[i].close()
                         self.clients.pop(i)
 
                     if client.conn in x_ready:
-                        self.logger.error(f"Client {client.name} had an unexpected socket error")
+                        self.logger.error(
+                            f"Client {client.name} had an unexpected socket error"
+                        )
                         self.broadcast_to_all(TaskDisconnect(client.name), client)
                         client.close()
                         self.clients.pop(i)
